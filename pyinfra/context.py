@@ -9,7 +9,12 @@ from contextlib import contextmanager
 from types import ModuleType
 from typing import TYPE_CHECKING
 
-from gevent.local import local
+import contextvars
+
+# Create context variables for config and host
+ctx_config = contextvars.ContextVar("config")
+ctx_host = contextvars.ContextVar("host")
+
 from typing_extensions import override
 
 if TYPE_CHECKING:
