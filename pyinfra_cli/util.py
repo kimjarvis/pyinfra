@@ -12,7 +12,9 @@ from types import CodeType, FunctionType, ModuleType
 from typing import Callable
 
 import click
-import gevent
+import asyncio
+from typing import Callable
+
 
 from pyinfra import logger, state
 from pyinfra.api.command import PyinfraCommand
@@ -194,13 +196,15 @@ def try_import_module_attribute(path, prefix=None, raise_for_none=True):
 
     return attr
 
-
-def _parallel_load_hosts(state: "State", callback: Callable, name: str):
-    def load_file(local_host):
+async def _parallel_load_hosts(state: "State", callback: Callable, name: str):
+    async def load_file(local_host):
         try:
+            # Use context managers for state configuration and host context
             with ctx_config.use(state.config.copy()):
                 with ctx_host.use(local_host):
-                    callback()
+                    # Run the callback in a thread pool if it's blocking
+                    await asyncio.get_event_loop().run_in_executor(None, callback)
+
                     logger.info(
                         "{0}{1} {2}".format(
                             local_host.print_prefix,
@@ -211,16 +215,24 @@ def _parallel_load_hosts(state: "State", callback: Callable, name: str):
         except Exception as e:
             return e
 
-    greenlet_to_host = {
-        state.pool.spawn(load_file, host): host for host in state.inventory.iter_active_hosts()
+    # Create a list of tasks for each active host
+    tasks = {
+        asyncio.create_task(load_file(host)): host
+        for host in state.inventory.iter_active_hosts()
     }
 
-    with progress_spinner(greenlet_to_host.values()) as progress:
-        for greenlet in gevent.iwait(greenlet_to_host.keys()):
-            host = greenlet_to_host[greenlet]
-            result = greenlet.get()
+    # Use a spinner to track progress
+    with progress_spinner(tasks.values()) as progress:
+        # Wait for tasks to complete as they finish
+        for task in asyncio.as_completed(tasks.keys()):
+            host = tasks[await task]
+            result = task.result()
+
+            # If an exception occurred, re-raise it
             if isinstance(result, Exception):
                 raise result
+
+            # Update progress
             progress(host)
 
 

@@ -3,6 +3,7 @@ from tempfile import mkstemp
 from typing import TYPE_CHECKING
 
 import click
+from functools import lru_cache
 from typing_extensions import Unpack, override
 
 from pyinfra import logger
@@ -21,7 +22,7 @@ if TYPE_CHECKING:
     from pyinfra.api.state import State
 
 
-@memoize
+@lru_cache(maxsize=None)  # Replace memoize with lru_cache for caching results
 def show_warning() -> None:
     logger.warning("The @dockerssh connector is in beta!")
 

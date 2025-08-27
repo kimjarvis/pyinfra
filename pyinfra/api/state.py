@@ -7,7 +7,6 @@ from graphlib import CycleError, TopologicalSorter
 from multiprocessing import cpu_count
 from typing import TYPE_CHECKING, Callable, Iterator, Optional
 
-from gevent.pool import Pool
 from paramiko import PKey
 
 from pyinfra import logger
@@ -154,9 +153,6 @@ class State:
 
     # A pyinfra.api.Config
     config: "Config"
-
-    # Main gevent pool
-    pool: "Pool"
 
     # Current stage this state is in
     current_stage: StateStage = StateStage.Setup

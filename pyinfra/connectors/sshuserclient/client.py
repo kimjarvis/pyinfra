@@ -5,7 +5,7 @@ source has now vanished (https://github.com/tobald/sshuserclient).
 
 from os import path
 
-from gevent.lock import BoundedSemaphore
+import asyncio
 from paramiko import (
     HostKeys,
     MissingHostKeyPolicy,
@@ -22,7 +22,7 @@ from pyinfra.api.util import memoize
 
 from .config import SSHConfig
 
-HOST_KEYS_LOCK = BoundedSemaphore()
+HOST_KEYS_LOCK = asyncio.BoundedSemaphore()
 
 
 class StrictPolicy(MissingHostKeyPolicy):
@@ -34,10 +34,11 @@ class StrictPolicy(MissingHostKeyPolicy):
         )
 
 
-def append_hostkey(client, hostname, key):
-    """Append hostname to the clients host_keys_file"""
+async def append_hostkey(client, hostname, key):
+    """Append hostname to the client's host_keys_file."""
 
-    with HOST_KEYS_LOCK:
+    # Acquire the semaphore asynchronously
+    async with HOST_KEYS_LOCK:
         # The paramiko client saves host keys incorrectly whereas the host keys object does
         # this correctly, so use that with the client filename variable.
         # See: https://github.com/paramiko/paramiko/pull/1989
@@ -48,6 +49,8 @@ def append_hostkey(client, hostname, key):
                     hostname
                 ),
             )
+
+        # Open the host keys file and append the new entry
         with open(client._host_keys_filename, "a") as host_keys_file:
             hk_entry = host_key_entry.to_line()
             if hk_entry is None:
@@ -119,17 +122,19 @@ def get_ssh_config(user_config_file=None):
             return ssh_config
 
 
-@memoize
-def get_host_keys(filename):
-    with HOST_KEYS_LOCK:
+@lru_cache(maxsize=None)  # Replace memoize with lru_cache for caching results
+async def get_host_keys(filename):
+    """Load host keys from the given filename using an asyncio lock."""
+
+    # Acquire the semaphore asynchronously
+    async with HOST_KEYS_LOCK:
         host_keys = HostKeys()
 
         try:
+            # Load host keys from the file
             host_keys.load(filename)
-        # When paramiko encounters a bad host keys line it sometimes bails the
-        # entire load incorrectly.
-        # See: https://github.com/paramiko/paramiko/pull/1990
         except Exception as e:
+            # Log a warning if loading fails
             logger.warning("Failed to load host keys from {0}: {1}".format(filename, e))
 
         return host_keys

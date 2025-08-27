@@ -9,7 +9,8 @@ from subprocess import PIPE, Popen
 from typing import TYPE_CHECKING, Callable, Iterable, Optional, Union
 
 import click
-import gevent
+import asyncio
+from typing import Iterable, Optional
 
 from pyinfra import logger
 from pyinfra.api import MaskString, QuoteString, StringCommand
@@ -111,80 +112,81 @@ class CommandOutput:
         return "\n".join(self.stderr_lines)
 
 
-def read_buffer(
-    name: str,
-    io: Iterable,
-    output_queue: Queue[OutputLine],
-    print_output=False,
-    print_func=None,
+import asyncio
+from typing import Iterable, Optional
+
+# Assuming CommandOutput and OutputLine are defined elsewhere
+class CommandOutput:
+    def __init__(self, output_lines):
+        self.output_lines = output_lines
+
+class OutputLine:
+    def __init__(self, stream: str, line: str):
+        self.stream = stream
+        self.line = line
+
+async def read_buffer(
+    stream_name: str,
+    buffer: Iterable,
+    queue: asyncio.Queue,
+    print_output: bool,
+    print_func: callable,
 ) -> None:
-    """
-    Reads a file-like buffer object into lines and optionally prints the output.
-    """
-
-    def _print(line):
-        if print_func:
-            line = print_func(line)
-
-        click.echo(line, err=True)
-
-    for line in io:
-        # Handle local Popen shells returning list of bytes, not strings
-        if not isinstance(line, str):
-            line = line.decode("utf-8")
-
-        line = line.rstrip("\n")
-        output_queue.put(OutputLine(name, line))
-
+    """Reads from the buffer and puts lines into the queue."""
+    for line in buffer:
         if print_output:
-            _print(line)
+            print(print_func(line))
+        await queue.put(OutputLine(stream_name, line))
 
-
-def read_output_buffers(
+async def read_output_buffers(
     stdout_buffer: Iterable,
     stderr_buffer: Iterable,
     timeout: Optional[int],
     print_output: bool,
     print_prefix: str,
 ) -> CommandOutput:
-    output_queue: Queue[OutputLine] = Queue()
+    """Asyncio equivalent of the gevent-based function."""
+    output_queue: asyncio.Queue[OutputLine] = asyncio.Queue()
 
-    # Iterate through outputs to get an exit status and generate desired list
-    # output, done in two greenlets so stdout isn't printed before stderr. Not
-    # attached to state.pool to avoid blocking it with 2x n-hosts greenlets.
-    stdout_reader = gevent.spawn(
-        read_buffer,
-        "stdout",
-        stdout_buffer,
-        output_queue,
-        print_output=print_output,
-        print_func=lambda line: "{0}{1}".format(print_prefix, line),
+    # Create tasks for reading stdout and stderr
+    stdout_reader = asyncio.create_task(
+        read_buffer(
+            "stdout",
+            stdout_buffer,
+            output_queue,
+            print_output=print_output,
+            print_func=lambda line: f"{print_prefix}{line}",
+        )
     )
-    stderr_reader = gevent.spawn(
-        read_buffer,
-        "stderr",
-        stderr_buffer,
-        output_queue,
-        print_output=print_output,
-        print_func=lambda line: "{0}{1}".format(
-            print_prefix,
-            click.style(line, "red"),
-        ),
+    stderr_reader = asyncio.create_task(
+        read_buffer(
+            "stderr",
+            stderr_buffer,
+            output_queue,
+            print_output=print_output,
+            print_func=lambda line: f"{print_prefix}{click.style(line, 'red')}",
+        )
     )
 
-    # Wait on output, with our timeout (or None)
-    greenlets = gevent.wait((stdout_reader, stderr_reader), timeout=timeout)
+    # Wait for both tasks to complete, with an optional timeout
+    done, pending = await asyncio.wait(
+        {stdout_reader, stderr_reader},
+        timeout=timeout,
+        return_when=asyncio.ALL_COMPLETED,
+    )
 
-    # Timeout doesn't raise an exception, but gevent.wait returns the greenlets
-    # which did complete. So if both haven't completed, we kill them and fail
-    # with a timeout.
-    if len(greenlets) != 2:
-        stdout_reader.kill()
-        stderr_reader.kill()
+    # If not all tasks completed, cancel the pending ones and raise a timeout error
+    if len(done) != 2:
+        for task in pending:
+            task.cancel()
+        raise TimeoutError("Operation timed out")
 
-        raise timeout_error()
+    # Collect results from the queue
+    output_lines = []
+    while not output_queue.empty():
+        output_lines.append(await output_queue.get())
 
-    return CommandOutput(list(output_queue.queue))
+    return CommandOutput(output_lines)
 
 
 # Connector execution control

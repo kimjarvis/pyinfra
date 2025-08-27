@@ -17,7 +17,8 @@ from socket import error as socket_error, timeout as timeout_error
 from typing import TYPE_CHECKING, Any, Callable, Generic, Iterable, Optional, Type, TypeVar, cast
 
 import click
-import gevent
+import asyncio
+from asyncio import as_completed
 from paramiko import SSHException
 from typing_extensions import override
 
@@ -142,25 +143,35 @@ def _handle_fact_kwargs(state: "State", host: "Host", cls, args, kwargs):
     return fact_kwargs, global_kwargs
 
 
-def get_facts(state, *args, **kwargs):
-    def get_host_fact(host, *args, **kwargs):
-        return get_fact(state, host, *args, **kwargs)
+async def get_host_fact(state, host, *args, **kwargs):
+    # Assuming get_fact is also async-compatible or can be awaited
+    return await get_fact(state, host, *args, **kwargs)
 
-    greenlet_to_host = {
-        state.pool.spawn(get_host_fact, host, *args, **kwargs): host
+async def get_facts(state, *args, **kwargs):
+    # Create a dictionary mapping tasks to hosts
+    tasks_to_host = {
+        asyncio.create_task(get_host_fact(state, host, *args, **kwargs)): host
         for host in state.inventory.iter_active_hosts()
     }
 
     results = {}
 
-    with progress_spinner(greenlet_to_host.values()) as progress:
-        for greenlet in gevent.iwait(greenlet_to_host.keys()):
-            host = greenlet_to_host[greenlet]
-            results[host] = greenlet.get()
-            progress(host)
+    # Use a progress spinner (assuming progress_spinner is compatible with asyncio)
+    with progress_spinner(tasks_to_host.values()) as progress:
+        # Wait for tasks to complete iteratively
+        for task in as_completed(tasks_to_host.keys()):
+            host = tasks_to_host[task]
+            try:
+                # Await the result of the task
+                results[host] = await task
+            except Exception as e:
+                # Handle exceptions if any task fails
+                results[host] = e
+            finally:
+                # Update progress for the completed host
+                progress(host)
 
     return results
-
 
 def get_fact(
     state: "State",

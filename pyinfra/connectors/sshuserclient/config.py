@@ -8,7 +8,6 @@ import re
 from os import environ, path
 
 import paramiko.config
-from gevent.subprocess import CalledProcessError, check_call
 from paramiko import SSHConfig as ParamikoSSHConfig
 from typing_extensions import override
 
@@ -16,33 +15,40 @@ from pyinfra import logger
 
 SETTINGS_REGEX = re.compile(r"(\w+)(?:\s*=\s*|\s+)(.+)")
 
-
 class FakeInvokeResult:
-    ok = False
-
+    def __init__(self):
+        self.ok = False  # Default to False
 
 class FakeInvoke:
     @staticmethod
-    def run(cmd, *args, **kwargs):
+    async def run(cmd, *args, **kwargs):
         result = FakeInvokeResult()
 
         try:
-            cmd = [environ["SHELL"], cmd]
-            try:
-                code = check_call(cmd)
-            except CalledProcessError as e:
-                code = e.returncode
-            result.ok = code == 0
+            # Prepare the command to run in the shell
+            shell = os.environ.get("SHELL", "/bin/sh")  # Default to /bin/sh if SHELL is not set
+            cmd = [shell, "-c", cmd]
+
+            # Create and execute the subprocess asynchronously
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            # Wait for the subprocess to complete and get the return code
+            await process.wait()
+            result.ok = process.returncode == 0
+
         except Exception as e:
+            # Log any exceptions that occur during execution
             logger.warning(
-                ("pyinfra encountered an error loading SSH config match exec {0}: {1}").format(
-                    cmd,
-                    e,
-                ),
+                "pyinfra encountered an error loading SSH config match exec %s: %s",
+                cmd,
+                e,
             )
 
         return result
-
 
 paramiko.config.invoke = FakeInvoke  # type: ignore
 

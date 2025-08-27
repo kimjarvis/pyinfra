@@ -90,38 +90,65 @@ class ContextObject:
         return hash(self._get_module())
 
 
-class LocalContextObject(ContextObject):
-    _container_cls = local
+class LocalContextObject:
+    def __init__(self, context_var):
+        self.context_var = context_var
 
+    @property
+    def context(self):
+        return self.context_var.get()
+
+    def use(self, value):
+        return self.context_var.set(value)
+
+    def reset(self, token):
+        self.context_var.reset(token)
+
+import contextvars
+from contextlib import contextmanager
 
 class ContextManager:
-    def __init__(self, key, context_cls):
-        self.context = context_cls()
+    def __init__(self, key):
+        # Create a ContextVar for task-local storage
+        self._context_var = contextvars.ContextVar(key)
 
     def get(self):
-        return getattr(self.context._container, "module", None)
+        """Retrieve the current value of the context variable."""
+        try:
+            return self._context_var.get()
+        except LookupError:
+            return None  # Return None if no value is set
 
     def set(self, module):
-        self.context._container.module = module
-
-    def set_base(self, module):
-        self.context._base_cls = module
+        """Set the value of the context variable."""
+        self._context_var.set(module)
 
     def reset(self) -> None:
-        self.context._container.module = None
+        """Reset the context variable to its default state."""
+        self._context_var.reset()
 
     def isset(self):
+        """Check if the context variable is set."""
         return self.get() is not None
 
     @contextmanager
     def use(self, module):
+        """
+        Context manager to temporarily set the context variable.
+        Restores the previous value after exiting the block.
+        """
         old_module = self.get()
         if old_module is module:
-            yield  # if we're double-setting, nothing to do
+            yield  # If the same value is already set, do nothing
             return
-        self.set(module)
-        yield
-        self.set(old_module)
+
+        # Set the new value
+        token = self._context_var.set(module)
+        try:
+            yield
+        finally:
+            # Restore the old value
+            self._context_var.reset(token)
 
 
 ctx_state = ContextManager("state", ContextObject)

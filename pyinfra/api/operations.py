@@ -7,7 +7,8 @@ from socket import error as socket_error, timeout as timeout_error
 from typing import TYPE_CHECKING, Optional, cast
 
 import click
-import gevent
+import asyncio
+from itertools import product
 from paramiko import SSHException
 
 from pyinfra import logger
@@ -290,32 +291,31 @@ def _run_serial_ops(state: "State"):
             except PyinfraError:
                 state.fail_hosts({host})
 
-
-def _run_no_wait_ops(state: "State"):
+async def _run_no_wait_ops(state: "State"):
     """
-    Run all ops for all servers at once.
+    Run all ops for all servers at once using asyncio.
     """
 
     hosts_operations = product(state.inventory.iter_active_hosts(), state.get_op_order())
     with progress_spinner(hosts_operations) as progress:
-        # Spawn greenlet for each host to run *all* ops
+        # Create asyncio tasks for each host to run *all* ops
         if state.pool is None:
             raise PyinfraError("No pool found on state.")
-        greenlets = [
-            state.pool.spawn(
-                _run_host_ops,
-                state,
-                host,
-                progress=progress,
+
+        tasks = [
+            asyncio.create_task(
+                _run_host_ops(state, host, progress=progress)
             )
             for host in state.inventory.iter_active_hosts()
         ]
-        gevent.joinall(greenlets)
+
+        # Wait for all tasks to complete
+        await asyncio.gather(*tasks)
 
 
-def _run_single_op(state: "State", op_hash: str):
+async def _run_single_op(state: "State", op_hash: str):
     """
-    Run a single operation for all servers. Can be configured to run in serial.
+    Run a single operation for all servers using asyncio. Can be configured to run in serial.
     """
 
     state.trigger_callbacks("operation_start", op_hash)
@@ -327,9 +327,9 @@ def _run_single_op(state: "State", op_hash: str):
 
     if op_meta.global_arguments["_serial"]:
         with progress_spinner(state.inventory.iter_active_hosts()) as progress:
-            # For each host, run the op
+            # For each host, run the op sequentially
             for host in state.inventory.iter_active_hosts():
-                result = _run_host_op_with_context(state, host, op_hash)
+                result = await _run_host_op_with_context(state, host, op_hash)
                 progress(host)
 
                 if not result:
@@ -339,7 +339,7 @@ def _run_single_op(state: "State", op_hash: str):
         # Start with the whole inventory in one batch
         batches = [list(state.inventory.iter_active_hosts())]
 
-        # If parallel set break up the inventory into a series of batches
+        # If parallel is set, break up the inventory into a series of batches
         parallel = op_meta.global_arguments["_parallel"]
         if parallel:
             hosts = list(state.inventory.iter_active_hosts())
@@ -347,22 +347,21 @@ def _run_single_op(state: "State", op_hash: str):
 
         for batch in batches:
             with progress_spinner(batch) as progress:
-                # Spawn greenlet for each host
-                if state.pool is None:
-                    raise PyinfraError("No pool found on state.")
-                greenlet_to_host = {
-                    state.pool.spawn(_run_host_op_with_context, state, host, op_hash): host
+                # Create asyncio tasks for each host in the batch
+                tasks_to_host = {
+                    asyncio.create_task(_run_host_op_with_context(state, host, op_hash)): host
                     for host in batch
                 }
 
-                # Trigger CLI progress as hosts complete if provided
-                for greenlet in gevent.iwait(greenlet_to_host.keys()):
-                    host = greenlet_to_host[greenlet]
+                # Trigger CLI progress as hosts complete
+                for completed_task in asyncio.as_completed(tasks_to_host.keys()):
+                    host = tasks_to_host[await completed_task]
                     progress(host)
 
                 # Get all the results
-                for greenlet, host in greenlet_to_host.items():
-                    if not greenlet.get():
+                for task, host in tasks_to_host.items():
+                    result = await task
+                    if not result:
                         failed_hosts.add(host)
 
     # Now all the batches/hosts are complete, fail any failures

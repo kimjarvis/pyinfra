@@ -5,7 +5,8 @@ from inspect import getfullargspec
 from string import Formatter
 from typing import IO, TYPE_CHECKING, Callable, Union
 
-import gevent
+
+import asyncio
 from typing_extensions import Unpack, override
 
 from pyinfra.context import LocalContextObject, ctx_config, ctx_host
@@ -230,25 +231,31 @@ class FunctionCommand(PyinfraCommand):
             self.kwargs,
         )
 
-    @override
-    def execute(self, state: "State", host: "Host", connector_arguments: ConnectorArguments):
-        argspec = getfullargspec(self.function)
-        if "state" in argspec.args and "host" in argspec.args:
-            return self.function(state, host, *self.args, **self.kwargs)
+@override
+async def execute(self, state: "State", host: "Host", connector_arguments: ConnectorArguments):
+    argspec = getfullargspec(self.function)
+    if "state" in argspec.args and "host" in argspec.args:
+        return await self.function(state, host, *self.args, **self.kwargs)
 
-        # If we're already running inside a greenlet (ie a nested callback) just execute the func
-        # without any gevent.spawn which will break the local host object.
-        if isinstance(host, LocalContextObject):
-            self.function(*self.args, **self.kwargs)
-            return
+    # If we're already running inside a task (i.e., nested callback), just execute the func
+    if isinstance(host, LocalContextObject):
+        return await self.function(*self.args, **self.kwargs)
 
-        def execute_function() -> None:
-            with ctx_config.use(state.config.copy()):
-                with ctx_host.use(host):
-                    self.function(*self.args, **self.kwargs)
+    async def execute_function():
+        # Set context variables
+        config_token = config_context.use(state.config.copy())
+        host_token = host_context.use(host)
+        try:
+            # Execute the function
+            return await self.function(*self.args, **self.kwargs)
+        finally:
+            # Reset context variables
+            config_context.reset(config_token)
+            host_context.reset(host_token)
 
-        greenlet = gevent.spawn(execute_function)
-        return greenlet.get()
+    # Schedule the coroutine as a task
+    task = asyncio.create_task(execute_function())
+    return await task
 
 
 class RsyncCommand(PyinfraCommand):

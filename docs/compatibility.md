@@ -15,13 +15,6 @@ Where possible pyinfra follows [semantic versioning](https://semver.org/) rules.
 
 pyinfra works on anywhere that runs Python - Mac, Linux & Windows are all supported.
 
-### Editor Integration
-
-#### PyCharm
-
-To debug pyinfra within PyCharm, you need to [explicitly enable support for Gevent](https://blog.jetbrains.com/pycharm/2012/08/gevent-debug-support/).
-
-
 ## Remote Systems
 
 pyinfra aims to be compatible with all Unix-like operating systems and is currently developed against:
