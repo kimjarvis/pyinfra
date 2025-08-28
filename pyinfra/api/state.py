@@ -236,8 +236,8 @@ class State:
         self.callback_handlers: list[BaseStateCallback] = []
 
         # Setup greenlet pools
-        self.pool = Pool(config.PARALLEL)
-        self.fact_pool = Pool(config.PARALLEL)
+        # self.pool = Pool(config.PARALLEL)
+        # self.fact_pool = Pool(config.PARALLEL)
 
         # Private keys
         self.private_keys: dict[str, PKey] = {}

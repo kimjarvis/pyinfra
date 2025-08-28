@@ -26,8 +26,7 @@ from pyinfra.connectors.util import CommandOutput, remove_any_sudo_askpass_file
 from .connectors import get_execution_connector
 from .exceptions import ConnectError
 from .facts import FactBase, ShortFactBase, get_fact
-from .util import sha1_hash
-from functools import lru_cache
+from .util import memoize, sha1_hash
 
 if TYPE_CHECKING:
     from pyinfra.api.arguments import AllArguments
@@ -313,7 +312,7 @@ class Host:
             old_deploy_data,
         )
 
-    @lru_cache(maxsize=None)  # Replace memoize with lru_cache for caching results
+    @memoize
     def _get_temp_directory(self):
         temp_directory = self.state.config.TEMP_DIR
 

@@ -1,8 +1,8 @@
+import asyncio
 import signal
 import sys
 
 import click
-import asyncio
 
 import pyinfra
 
@@ -30,8 +30,20 @@ def _handle_interrupt(signum, frame):
 
 
 async def main():
-    # Your application logic here
-    await execute(cli())
+    """
+    Main asynchronous function to run the CLI.
+    """
+    try:
+        # Run the CLI command
+        await cli()
+    except asyncio.CancelledError:
+        click.echo("CLI execution was cancelled.")
+        sys.exit(0)
+
 
 if __name__ == "pyinfra_cli.__main__":
+    # Register the interrupt handler for SIGINT
+    signal.signal(signal.SIGINT, _handle_interrupt)
+
+    # Run the main function using asyncio
     asyncio.run(main())

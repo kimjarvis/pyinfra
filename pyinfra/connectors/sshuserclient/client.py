@@ -122,12 +122,9 @@ def get_ssh_config(user_config_file=None):
             return ssh_config
 
 
-@lru_cache(maxsize=None)  # Replace memoize with lru_cache for caching results
-async def get_host_keys(filename):
-    """Load host keys from the given filename using an asyncio lock."""
-
-    # Acquire the semaphore asynchronously
-    async with HOST_KEYS_LOCK:
+@memoize
+def get_host_keys(filename):
+    with HOST_KEYS_LOCK:
         host_keys = HostKeys()
 
         try:

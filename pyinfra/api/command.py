@@ -9,7 +9,7 @@ from typing import IO, TYPE_CHECKING, Callable, Union
 import asyncio
 from typing_extensions import Unpack, override
 
-from pyinfra.context import LocalContextObject, ctx_config, ctx_host
+from pyinfra.context import ctx_config, ctx_host, ContextObject
 
 from .arguments import ConnectorArguments
 
@@ -238,7 +238,7 @@ async def execute(self, state: "State", host: "Host", connector_arguments: Conne
         return await self.function(state, host, *self.args, **self.kwargs)
 
     # If we're already running inside a task (i.e., nested callback), just execute the func
-    if isinstance(host, LocalContextObject):
+    if isinstance(host, ContextObject):
         return await self.function(*self.args, **self.kwargs)
 
     async def execute_function():

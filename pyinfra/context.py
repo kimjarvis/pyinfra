@@ -1,21 +1,14 @@
 """
-The `ContextObject` and `ContextManager` provide context specific variables that
-are imported and used throughout pyinfra and end user deploy code (CLI mode).
+The `ContextObject` and `ContextManager` provide context-specific variables that
+are imported and used throughout pyinfra and end-user deploy code (CLI mode).
 
 These variables always represent the current executing pyinfra context.
 """
 
 from contextlib import contextmanager
 from types import ModuleType
-from typing import TYPE_CHECKING
-
+from typing import TYPE_CHECKING, override
 import contextvars
-
-# Create context variables for config and host
-ctx_config = contextvars.ContextVar("config")
-ctx_host = contextvars.ContextVar("host")
-
-from typing_extensions import override
 
 if TYPE_CHECKING:
     from pyinfra.api.config import Config
@@ -24,20 +17,14 @@ if TYPE_CHECKING:
     from pyinfra.api.state import State
 
 
-class container:
-    module = None
-
-
 class ContextObject:
-    _container_cls = container
     _base_cls: ModuleType
 
     def __init__(self) -> None:
-        self._container = self._container_cls()
-        self._container.module = None
+        self._module_var = contextvars.ContextVar("module", default=None)
 
     def _get_module(self):
-        return self._container.module
+        return self._module_var.get()
 
     @override
     def __repr__(self):
@@ -55,13 +42,14 @@ class ContextObject:
         return dir(self._base_cls)
 
     def __getattr__(self, key):
-        if self._get_module() is None:
+        mod = self._get_module()
+        if mod is None:
             return getattr(self._base_cls, key)
-        return getattr(self._get_module(), key)
+        return getattr(mod, key)
 
     @override
     def __setattr__(self, key, value):
-        if key in ("_container", "_base_cls"):
+        if key in ("_module_var", "_base_cls"):
             return super().__setattr__(key, value)
 
         mod = self._get_module()
@@ -90,67 +78,39 @@ class ContextObject:
         return hash(self._get_module())
 
 
-class LocalContextObject:
-    def __init__(self, context_var):
-        self.context_var = context_var
-
-    @property
-    def context(self):
-        return self.context_var.get()
-
-    def use(self, value):
-        return self.context_var.set(value)
-
-    def reset(self, token):
-        self.context_var.reset(token)
-
-import contextvars
-from contextlib import contextmanager
-
 class ContextManager:
-    def __init__(self, key):
-        # Create a ContextVar for task-local storage
-        self._context_var = contextvars.ContextVar(key)
+    def __init__(self, key, context_cls):
+        self.context = context_cls()
 
     def get(self):
-        """Retrieve the current value of the context variable."""
-        try:
-            return self._context_var.get()
-        except LookupError:
-            return None  # Return None if no value is set
+        return self.context._get_module()
 
     def set(self, module):
-        """Set the value of the context variable."""
-        self._context_var.set(module)
+        self.context._module_var.set(module)
+
+    def set_base(self, module):
+        self.context._base_cls = module
 
     def reset(self) -> None:
-        """Reset the context variable to its default state."""
-        self._context_var.reset()
+        self.context._module_var.set(None)
 
     def isset(self):
-        """Check if the context variable is set."""
         return self.get() is not None
 
     @contextmanager
     def use(self, module):
-        """
-        Context manager to temporarily set the context variable.
-        Restores the previous value after exiting the block.
-        """
         old_module = self.get()
         if old_module is module:
-            yield  # If the same value is already set, do nothing
+            yield  # if we're double-setting, nothing to do
             return
-
-        # Set the new value
-        token = self._context_var.set(module)
+        self.set(module)
         try:
             yield
         finally:
-            # Restore the old value
-            self._context_var.reset(token)
+            self.set(old_module)
 
 
+# Context managers for various components
 ctx_state = ContextManager("state", ContextObject)
 state: "State" = ctx_state.context
 
@@ -159,12 +119,12 @@ inventory: "Inventory" = ctx_inventory.context
 
 # Config can be modified mid-deploy, so we use a local object here which
 # is based on a copy of the state config.
-ctx_config = ContextManager("config", LocalContextObject)
+ctx_config = ContextManager("config", ContextObject)
 config: "Config" = ctx_config.context
 
 # Hosts are prepared in parallel each in a greenlet, so we use a local to
 # point at different host objects in each greenlet.
-ctx_host = ContextManager("host", LocalContextObject)
+ctx_host = ContextManager("host", ContextObject)
 host: "Host" = ctx_host.context
 
 

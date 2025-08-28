@@ -14,8 +14,8 @@ from typing_extensions import TypedDict, Unpack, override
 from pyinfra import logger
 from pyinfra.api.command import QuoteString, StringCommand
 from pyinfra.api.exceptions import ConnectError
-from pyinfra.api.util import get_file_io, memoize
-
+from pyinfra.api.util import get_file_io
+from functools import lru_cache
 from .base import BaseConnector, DataMeta
 from .scp import SCPClient
 from .ssh_util import get_private_key, raise_connect_error
@@ -372,7 +372,7 @@ class SSHConnector(BaseConnector):
 
         return status, combined_output
 
-    @memoize
+    @lru_cache(maxsize=None)
     def get_file_transfer_connection(self) -> FileTransferClient | None:
         assert self.client is not None
         transport = self.client.get_transport()
